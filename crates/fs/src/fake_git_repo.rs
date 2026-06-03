@@ -324,6 +324,10 @@ impl GitRepository for FakeGitRepository {
                     state.head_contents = snapshot.head_contents;
                     state.index_contents = state.head_contents.clone();
                 }
+                ResetMode::Hard => {
+                    state.head_contents = snapshot.head_contents;
+                    state.index_contents = state.head_contents.clone();
+                }
             }
 
             state.refs.insert("HEAD".into(), snapshot.sha);
@@ -1550,5 +1554,29 @@ impl GitRepository for FakeGitRepository {
 
     fn is_trusted(&self) -> bool {
         self.is_trusted.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn merge(
+        &self,
+        _branch_or_commit: String,
+        _env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        async move { Err(anyhow::anyhow!("merge not implemented in fake repo")) }.boxed()
+    }
+
+    fn rebase_onto(
+        &self,
+        _upstream: String,
+        _env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        async move { Err(anyhow::anyhow!("rebase not implemented in fake repo")) }.boxed()
+    }
+
+    fn cherry_pick(
+        &self,
+        _commit: String,
+        _env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        async move { Err(anyhow::anyhow!("cherry_pick not implemented in fake repo")) }.boxed()
     }
 }

@@ -1,4 +1,5 @@
 use crate::{
+    CreateBranchFromCommitModal,
     commit_tooltip::{CommitAvatar, CommitDetails, CommitTooltip},
     commit_view::CommitView,
     git_status_icon,
@@ -18,7 +19,7 @@ use git::{
 use gpui::{
     Action, Anchor, AnyElement, App, Bounds, ClickEvent, ClipboardItem, DefiniteLength,
     DismissEvent, DragMoveEvent, ElementId, Empty, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, ScrollStrategy,
+    Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, PromptLevel, ScrollStrategy,
     ScrollWheelEvent, SharedString, Subscription, Task, TextStyleRefinement,
     UniformListScrollHandle, WeakEntity, Window, actions, anchored, deferred, point, prelude::*,
     px, uniform_list,
@@ -59,6 +60,7 @@ use ui::{
 use workspace::{
     ModalView, Workspace,
     item::{Item, ItemEvent, TabTooltipContent},
+    notifications::DetachAndPromptErr,
 };
 
 const COMMIT_CIRCLE_RADIUS: Pixels = px(3.5);
@@ -408,6 +410,16 @@ actions!(
         ScrollUp,
         /// Selects a commit half a page below the current selection.
         ScrollDown,
+        /// Creates a new branch starting at the selected commit.
+        CreateBranchFromCommit,
+        /// Resets the current branch to the selected commit (soft).
+        ResetSoftToCommit,
+        /// Resets the current branch to the selected commit (mixed).
+        ResetMixedToCommit,
+        /// Resets the current branch to the selected commit (hard).
+        ResetHardToCommit,
+        /// Cherry-picks the selected commit onto the current branch.
+        CherryPickCommit,
     ]
 );
 
@@ -2164,6 +2176,68 @@ impl GitGraph {
             .ok();
     }
 
+    fn open_create_branch_from_commit_modal(
+        &mut self,
+        sha: git::Oid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.get_repository(cx) else {
+            return;
+        };
+        let sha_string = sha.to_string();
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace.toggle_modal(window, cx, |window, cx| {
+                    CreateBranchFromCommitModal::new(sha_string, repo, window, cx)
+                });
+            })
+            .ok();
+    }
+
+    fn reset_to_commit(
+        &mut self,
+        sha: git::Oid,
+        mode: git::repository::ResetMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.get_repository(cx) else {
+            return;
+        };
+        let sha_string = sha.to_string();
+        let task = repo.update(cx, |repo, cx| repo.reset(sha_string, mode, cx));
+        cx.spawn_in(window, async move |_, cx| {
+            match task.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(anyhow::anyhow!("Operation was canceled")),
+            }
+        })
+        .detach_and_prompt_err("Failed to reset", window, cx, |_, _, _| None);
+    }
+
+    fn cherry_pick_commit(
+        &mut self,
+        sha: git::Oid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.get_repository(cx) else {
+            return;
+        };
+        let sha_string = sha.to_string();
+        let task = repo.update(cx, |repo, _| repo.cherry_pick(sha_string));
+        cx.spawn_in(window, async move |_, cx| {
+            match task.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(anyhow::anyhow!("Operation was canceled")),
+            }
+        })
+        .detach_and_prompt_err("Failed to cherry-pick", window, cx, |_, _, _| None);
+    }
+
     fn deploy_entry_context_menu(
         &mut self,
         position: Point<Pixels>,
@@ -2244,6 +2318,82 @@ impl GitGraph {
                             menu
                         }),
                     }
+                })
+                .map(|menu| {
+                    let git_graph_create = git_graph.clone();
+                    let git_graph_soft = git_graph.clone();
+                    let git_graph_mixed = git_graph.clone();
+                    let git_graph_hard = git_graph.clone();
+                    let git_graph_cherry = git_graph.clone();
+                    menu.separator()
+                        .header("Branch Operations")
+                        .entry(
+                            "Create Branch from Here…",
+                            Some(CreateBranchFromCommit.boxed_clone()),
+                            window.handler_for(&git_graph_create, move |this, window, cx| {
+                                this.open_create_branch_from_commit_modal(sha, window, cx);
+                            }),
+                        )
+                        .submenu("Reset to Here", move |menu, window, cx| {
+                            menu.entry(
+                                "Soft Reset",
+                                Some(ResetSoftToCommit.boxed_clone()),
+                                window.handler_for(&git_graph_soft, move |this, window, cx| {
+                                    this.reset_to_commit(
+                                        sha,
+                                        git::repository::ResetMode::Soft,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .entry(
+                                "Mixed Reset",
+                                Some(ResetMixedToCommit.boxed_clone()),
+                                window.handler_for(&git_graph_mixed, move |this, window, cx| {
+                                    this.reset_to_commit(
+                                        sha,
+                                        git::repository::ResetMode::Mixed,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .entry(
+                                "Hard Reset",
+                                Some(ResetHardToCommit.boxed_clone()),
+                                window.handler_for(&git_graph_hard, move |this, window, cx| {
+                                    let answer = window.prompt(
+                                        PromptLevel::Warning,
+                                        "Hard reset will discard all local changes. Continue?",
+                                        None,
+                                        &["Hard Reset", "Cancel"],
+                                        cx,
+                                    );
+                                    cx.spawn_in(window, async move |this, cx| {
+                                        if answer.await.ok() == Some(0) {
+                                            this.update_in(cx, |this, window, cx| {
+                                                this.reset_to_commit(
+                                                    sha,
+                                                    git::repository::ResetMode::Hard,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .ok();
+                                        }
+                                    })
+                                    .detach();
+                                }),
+                            )
+                        })
+                        .entry(
+                            "Cherry-pick",
+                            Some(CherryPickCommit.boxed_clone()),
+                            window.handler_for(&git_graph_cherry, move |this, window, cx| {
+                                this.cherry_pick_commit(sha, window, cx);
+                            }),
+                        )
                 })
                 .map(|mut menu| {
                     menu = menu.separator().header("Custom Commands");
