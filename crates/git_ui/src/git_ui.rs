@@ -30,6 +30,7 @@ use zed_actions;
 use crate::{commit_view::CommitView, git_panel::GitPanel, text_diff_view::TextDiffView};
 
 mod askpass_modal;
+pub mod branch_panel;
 pub mod branch_picker;
 mod commit_modal;
 pub mod commit_tooltip;
@@ -445,6 +446,90 @@ fn rename_current_branch(
     workspace.toggle_modal(window, cx, |window, cx| {
         RenameBranchModal::new(current_branch_name, repo, window, cx)
     });
+}
+
+pub struct CreateBranchFromCommitModal {
+    base_commit: String,
+    editor: Entity<Editor>,
+    repo: Entity<Repository>,
+}
+
+impl CreateBranchFromCommitModal {
+    pub fn new(
+        base_commit: String,
+        repo: Entity<Repository>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let editor = cx.new(|cx| {
+            let mut editor = Editor::single_line(window, cx);
+            editor.set_placeholder_text("New branch name…", window, cx);
+            editor
+        });
+        Self {
+            base_commit,
+            editor,
+            repo,
+        }
+    }
+
+    fn cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(DismissEvent);
+    }
+
+    fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.editor.read(cx).text(cx);
+        if name.is_empty() {
+            cx.emit(DismissEvent);
+            return;
+        }
+        let repo = self.repo.clone();
+        let base = self.base_commit.clone();
+        cx.spawn(async move |_, cx| {
+            match repo
+                .update(cx, |repo, _| repo.create_branch(name, Some(base)))
+                .await
+            {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(anyhow!("Operation was canceled")),
+            }
+        })
+        .detach_and_prompt_err("Failed to create branch", window, cx, |_, _, _| None);
+        cx.emit(DismissEvent);
+    }
+}
+
+impl EventEmitter<DismissEvent> for CreateBranchFromCommitModal {}
+impl ModalView for CreateBranchFromCommitModal {}
+impl Focusable for CreateBranchFromCommitModal {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.editor.focus_handle(cx)
+    }
+}
+
+impl Render for CreateBranchFromCommitModal {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .key_context("CreateBranchFromCommitModal")
+            .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::confirm))
+            .elevation_2(cx)
+            .w(rems(34.))
+            .child(
+                h_flex()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .child(Headline::new("Create Branch").size(HeadlineSize::Small)),
+            )
+            .child(
+                h_flex()
+                    .px_3()
+                    .pb_2()
+                    .child(self.editor.clone()),
+            )
+    }
 }
 
 fn copy_branch_name(workspace: &mut Workspace, cx: &mut Context<Workspace>) {

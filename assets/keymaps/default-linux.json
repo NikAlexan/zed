@@ -667,6 +667,7 @@
       "ctrl-shift-e": "project_panel::ToggleFocus",
       "ctrl-shift-b": "outline_panel::ToggleFocus",
       "ctrl-shift-g": "git_panel::ToggleFocus",
+      "ctrl-shift-y": "branch_panel::ToggleFocus",
       "ctrl-shift-d": "debug_panel::ToggleFocus",
       "ctrl-?": "agent::ToggleFocus",
       "alt-save": "workspace::SaveAll",

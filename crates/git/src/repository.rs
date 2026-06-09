@@ -571,6 +571,8 @@ pub enum ResetMode {
     /// Reset the branch pointer and index, leave worktree unchanged (this makes it look as though things that were
     /// committed are now unstaged).
     Mixed,
+    /// Reset the branch pointer, index, and worktree (discards all local changes).
+    Hard,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -1070,6 +1072,24 @@ pub trait GitRepository: Send + Sync {
 
     fn set_trusted(&self, trusted: bool);
     fn is_trusted(&self) -> bool;
+
+    fn merge(
+        &self,
+        branch_or_commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>>;
+
+    fn rebase_onto(
+        &self,
+        upstream: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>>;
+
+    fn cherry_pick(
+        &self,
+        commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>>;
 }
 
 pub enum DiffType {
@@ -1490,6 +1510,7 @@ impl GitRepository for RealGitRepository {
             let mode_flag = match mode {
                 ResetMode::Mixed => "--mixed",
                 ResetMode::Soft => "--soft",
+                ResetMode::Hard => "--hard",
             };
 
             let output = git
@@ -3188,6 +3209,75 @@ impl GitRepository for RealGitRepository {
 
     fn is_trusted(&self) -> bool {
         self.is_trusted.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn merge(
+        &self,
+        branch_or_commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        async move {
+            let git = git?;
+            let output = git
+                .build_command(&["merge", "--no-edit", &branch_or_commit])
+                .envs(env.iter())
+                .output()
+                .await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to merge:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn rebase_onto(
+        &self,
+        upstream: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        async move {
+            let git = git?;
+            let output = git
+                .build_command(&["rebase", &upstream])
+                .envs(env.iter())
+                .output()
+                .await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to rebase:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn cherry_pick(
+        &self,
+        commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        async move {
+            let git = git?;
+            let output = git
+                .build_command(&["cherry-pick", &commit])
+                .envs(env.iter())
+                .output()
+                .await?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Failed to cherry-pick:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            Ok(())
+        }
+        .boxed()
     }
 }
 

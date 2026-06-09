@@ -5196,7 +5196,9 @@ impl Repository {
                             commit,
                             mode: match reset_mode {
                                 ResetMode::Soft => git_reset::ResetMode::Soft.into(),
-                                ResetMode::Mixed => git_reset::ResetMode::Mixed.into(),
+                                ResetMode::Mixed | ResetMode::Hard => {
+                                    git_reset::ResetMode::Mixed.into()
+                                }
                             },
                         })
                         .await?;
@@ -8382,6 +8384,72 @@ impl Repository {
         self.remote_upstream_url
             .clone()
             .or(self.remote_origin_url.clone())
+    }
+
+    pub fn merge(
+        &mut self,
+        branch_or_commit: String,
+    ) -> oneshot::Receiver<Result<()>> {
+        self.send_job(
+            "merge",
+            Some(format!("git merge {branch_or_commit}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.merge(branch_or_commit, environment).await,
+                    RepositoryState::Remote(_) => {
+                        Err(anyhow::anyhow!("merge is not supported for remote repositories"))
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn rebase_onto(
+        &mut self,
+        upstream: String,
+    ) -> oneshot::Receiver<Result<()>> {
+        self.send_job(
+            "rebase_onto",
+            Some(format!("git rebase {upstream}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.rebase_onto(upstream, environment).await,
+                    RepositoryState::Remote(_) => {
+                        Err(anyhow::anyhow!("rebase is not supported for remote repositories"))
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn cherry_pick(
+        &mut self,
+        commit: String,
+    ) -> oneshot::Receiver<Result<()>> {
+        self.send_job(
+            "cherry_pick",
+            Some(format!("git cherry-pick {commit}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.cherry_pick(commit, environment).await,
+                    RepositoryState::Remote(_) => {
+                        Err(anyhow::anyhow!("cherry-pick is not supported for remote repositories"))
+                    }
+                }
+            },
+        )
     }
 }
 
